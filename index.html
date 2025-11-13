@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" type="image/x-icon" href="./icons/favicon.png">
+    <link rel="icon" type="image/x-icon" href="./icons/favicon.ico">
     <link rel="manifest" href="./manifest.json">
     <meta name="theme-color" content="#0099ff">
     <title>Bitácora Semanal de Gimnasio - App</title>
@@ -343,66 +343,53 @@
             color: #a0a0a0; /* Texto más tenue */
         }
 
-        /* ======================================= */
-        /* MEDIA QUERY (TABLET / ESCRITORIO) */
-        /* ======================================= */
-        @media (min-width: 600px) {
-            
-            .container {
-                border-radius: 8px; 
-                margin-top: 20px;
-                margin-bottom: 20px;
-                box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
-            }
-
-            .nav-bar {
-                padding: 10px 0;
-            }
-
-            .nav-button {
-                font-size: 16px; 
-                padding: 15px 10px;
-            }
-            
-            #registrar-tab .registro-form {
-                display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 20px;
-            }
-
-            #registrar-tab .registro-form div:nth-child(3) { 
-                grid-column: 1 / 3;
-            }
-            
-            #registrar-tab .registro-form button {
-                grid-column: 1 / 3;
-                margin-top: 0;
-            }
-
-            .card-grid {
-                display: flex;
-                flex-direction: column;
-                gap: 15px;
-                margin-top: 15px;
-            }
-
-            #weekly-overview-cards {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
-            }
+        /* Indicador de conexión (esquina superior derecha) */
+        #online-indicator {
+            position: absolute;
+            top: 12px;
+            right: 18px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(0,0,0,0.45);
+            padding: 6px 10px;
+            border-radius: 18px;
+            border: 1px solid #333;
+            color: #e0e0e0;
+            font-size: 13px;
+            z-index: 1100;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+        }
+        #online-indicator .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #28a745; /* verde */
+            box-shadow: 0 0 6px rgba(40,167,69,0.6);
+        }
+        #online-indicator.offline .dot {
+            background: #dc3545; /* rojo */
+            box-shadow: 0 0 6px rgba(220,53,69,0.6);
+        }
+        #online-indicator.hidden {
+            display: none;
         }
     </style>
 </head>
 <body>
     <!-- <button id="btn5min">Notificar en 5 min</button> -->
 
-    <div class="container">
+    <div class="container" style="position:relative;">
         <h1>
             <span id="smart-word">SMART</span>
             <span id="fit-word">FIT ⚡️ Bitácora</span>
         </h1>
-        
-        
+
+        <!-- Indicador de conexión -->
+        <div id="online-indicator" title="Estado de la conexión">
+            <span class="dot"></span>
+            <span id="online-text">Verificando...</span>
+        </div>
 
         <div id="registrar-tab" class="content-section active">
             <h2>📝 Registrar Sesión</h2>
@@ -541,19 +528,663 @@
             Coach IA
         </button>
     </nav>
-    <script >
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', function() {
-                navigator.serviceWorker.register('./service-worker.js').then(function(registration) {
-                    console.log('ServiceWorker registrado con éxito:', registration.scope);
-                }, function(err) {
-                    console.log('Error al registrar el ServiceWorker:', err);
-                });
+
+
+    <script>
+
+        if ("serviceWorker" in navigator) {
+            navigator.serviceWorker.register("./service-worker.js");
+        }
+        // --- CONFIGURACIÓN Y CONSTANTES ---
+                // ...existing code...
+        /**
+         * Muestra solo la sección .content-section cuyo id coincida con `idToShow`
+         * y oculta el resto.
+         * @param {string} idToShow - id del elemento .content-section que debe mostrarse
+         */
+        function showOnlyContentSectionById(idToShow) {
+            const sections = document.querySelectorAll('.content-section');
+            sections.forEach(section => {
+                if (section.id === idToShow) {
+                    section.classList.add('active');
+                } else {
+                    section.classList.remove('active');
+                }
             });
         }
+
+        // ...existing code...
+        const STORAGE_KEY = 'bitacoraGymRegistros';
+        const ROUTINE_KEY = 'carlosBelcastRoutine';
+        
+        // Base de la URL para todas las APIs de rutina
+        const BASE_API_URL = 'https://studio--studio-9121294900-64a17.us-central1.hosted.app/';
+        
+        // Mapeo de valores del selector a los endpoints de la API
+        const IDOL_ENDPOINTS = {
+            "Carlos Belcast": "api/fitness/routines/carlos-belcast",
+            "Andoni Fitness": "api/fitness/routines/andoni-fitness/",
+            "Joan Pradells": "api/fitness/routines/joan-pradells/",
+            "The Saiyan Kiwi": "api/fitness/routines/the-saiyan-kiwi/",
+            "Vikika Costa": "api/fitness/routines/vikika-costa/",
+        };
+
+
+
+        // Función auxiliar para fetch con reintentos
+        async function exponentialBackoffFetch(url, options, maxRetries = 5) {
+            for (let attempt = 0; attempt < maxRetries; attempt++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (response.status !== 429 && response.ok) {
+                        return response;
+                    } else if (response.status === 429 && attempt < maxRetries - 1) {
+                        const delay = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                    } else {
+                        throw new Error(`Error en la API: ${response.statusText}`);
+                    }
+                } catch (error) {
+                    if (attempt === maxRetries - 1) throw error;
+                    const delay = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        }
+
+
+        // Función de navegación: Muestra la pestaña seleccionada
+        function showTab(tabId, buttonElement) {
+            // Oculta todos los divs de contenido quitando la clase 'active'
+            document.querySelectorAll('.content-section').forEach(section => {
+                section.classList.remove('active');
+            });
+
+            // Muestra el div de contenido seleccionado agregando la clase 'active'
+            document.getElementById(tabId).classList.add('active');
+
+            // Actualiza el estado activo de los botones de navegación
+            document.querySelectorAll('.nav-button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            buttonElement.classList.add('active');
+
+            // Recargar datos solo si se navega a las pestañas de data
+            if (tabId === 'bitacora-tab') {
+                cargarBitacoraGuardada();
+            }
+            if (tabId === 'planeacion-tab') {
+                const routineData = localStorage.getItem(ROUTINE_KEY);
+                if (routineData) {
+                    cargarRutinaEnAmbasTablas(JSON.parse(routineData));
+                } else {
+                    cargarRutinasPorDefecto(); 
+                }
+            }
+            showOnlyContentSectionById(tabId);
+        }
+
+        // --- Funciones de Bitácora y Estado ---
+
+        function cargarFechaYHora() {
+            const now = new Date();
+            const optionsFecha = { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' };
+            
+            const fechaString = now.toLocaleDateString('es-ES', optionsFecha);
+            const diaSemanaString = diasSemana[now.getDay()];
+
+            document.getElementById('fecha').value = fechaString;
+            document.getElementById('dia-semana').value = diaSemanaString;
+        }
+
+        function renderizarRegistros(registros) {
+            const bitacoraList = document.getElementById('bitacora-list');
+            bitacoraList.innerHTML = ''; 
+            
+            if (registros.length === 0) {
+                bitacoraList.innerHTML = '<li style="color: #a0a0a0;"><strong>¡Empecemos!</strong> Aún no tienes sesiones registradas.</li>';
+                return;
+            }
+
+            registros.slice().reverse().forEach(registro => {
+                const nuevoRegistro = document.createElement('li');
+                nuevoRegistro.innerHTML = `
+                    <strong>${registro.diaSemana} - ${registro.fecha}</strong>
+                    <p>${registro.comentarios}</p>
+                `;
+                bitacoraList.appendChild(nuevoRegistro); 
+            });
+        }
+
+        function cargarBitacoraGuardada() {
+            const registrosJSON = localStorage.getItem(STORAGE_KEY);
+            let registros = registrosJSON ? JSON.parse(registrosJSON) : [];
+            renderizarRegistros(registros);
+        }
+
+        function registrarSesion() {
+            const fecha = document.getElementById('fecha').value;
+            const diaSemana = document.getElementById('dia-semana').value;
+            const comentarios = document.getElementById('comentarios').value;
+            
+            if (!comentarios.trim()) {
+                console.error("Por favor, ingresa los detalles de tu sesión.");
+                return;
+            }
+            
+            const nuevoRegistro = {
+                fecha: fecha,
+                diaSemana: diaSemana,
+                comentarios: comentarios.trim()
+            };
+
+            const registrosJSON = localStorage.getItem(STORAGE_KEY);
+            let registros = registrosJSON ? JSON.parse(registrosJSON) : [];
+
+            registros.push(nuevoRegistro);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(registros));
+            
+            document.getElementById('comentarios').value = '';
+            cargarFechaYHora();
+
+            console.log("¡Sesión registrada con éxito!");
+        }
+
+        // --- Funciones de Planeación (Descarga y Manejo de Estado) ---
+        
+        function getCompletionKey(routine) {
+            const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+            return `ROUTINE_COMPLETION_${today}_${routine.semana || 'Custom'}`;
+        }
+        
+        window.toggleSeriesCompletion = function(checkbox, completionKey) {
+            let completionState = JSON.parse(localStorage.getItem(completionKey)) || {};
+            
+            const exerciseIndex = checkbox.getAttribute('data-exercise-index');
+            const seriesNum = checkbox.getAttribute('data-series-num');
+            const uniqueId = `e${exerciseIndex}s${seriesNum}`; // Clave única simplificada
+            
+            completionState[uniqueId] = checkbox.checked;
+
+            localStorage.setItem(completionKey, JSON.stringify(completionState));
+        }
+
+
+        // Carga la rutina del día en el formato de cards con checkboxes
+        function cargarRutinaDelDia(diaHoy, routineData) {
+            const dailyContent = document.getElementById('daily-routine-content');
+            const currentDayTitle = document.getElementById('current-day-title');
+            
+            const todayRoutine = routineData.dias.find(d => d.dia.toLowerCase() === diaHoy.toLowerCase());
+            
+            const completionKey = getCompletionKey(routineData);
+            let completionState = JSON.parse(localStorage.getItem(completionKey)) || {};
+
+            dailyContent.innerHTML = ''; 
+
+            if (todayRoutine && todayRoutine.ejercicios.length > 0) {
+                currentDayTitle.textContent = `Rutina del Día: ${todayRoutine.dia} (${todayRoutine.enfoque})`;
+                
+                todayRoutine.ejercicios.forEach((ej, index) => {
+                    const card = document.createElement('div');
+                    card.className = 'exercise-card';
+                    
+                    let checklistHTML = '<div class="series-checklist">';
+                    const numSeries = parseInt(ej.series);
+
+                    for (let i = 1; i <= numSeries; i++) {
+                        const uniqueSeriesId = `e${index}s${i}`;
+                        const isChecked = completionState[uniqueSeriesId] === true;
+
+                        checklistHTML += `
+                            <label for="${uniqueSeriesId}" class="series-item">
+                                <input type="checkbox" id="${uniqueSeriesId}" 
+                                       data-exercise-index="${index}" 
+                                       data-series-num="${i}" 
+                                       ${isChecked ? 'checked' : ''} 
+                                       onchange="toggleSeriesCompletion(this, '${completionKey}')">
+                                <span>Serie ${i}</span>
+                            </label>
+                        `;
+                    }
+                    checklistHTML += '</div>';
+
+                    card.innerHTML = `
+                        <h4>${ej.nombre}</h4>
+                        <p><strong>Series:</strong> ${ej.series} | <strong>Repeticiones:</strong> ${ej.repeticiones}</p>
+                        ${checklistHTML}
+                    `;
+                    dailyContent.appendChild(card);
+                });
+
+            } else {
+                currentDayTitle.textContent = `Rutina del Día: ${diaHoy} (Descanso o Vacía)`;
+                dailyContent.innerHTML = '<p class="p-message">¡Hoy es día de descanso o aún no tienes ejercicios! Genera una rutina con el Coach IA o descarga una planeación.</p>';
+            }
+        }
+
+        // Carga la planeación semanal resumida
+        function cargarPlaneacionSemanal(routineData) {
+            const weeklyCardsContainer = document.getElementById('weekly-overview-cards');
+            weeklyCardsContainer.innerHTML = ''; 
+
+            const order = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"];
+            const daysMap = new Map();
+            
+            routineData.dias.forEach(diaData => {
+                daysMap.set(diaData.dia, {
+                    enfoque: diaData.enfoque,
+                    duracion: `${diaData.duracion_sugerida_min || '??'} min`,
+                    isRest: false,
+                    exerciseCount: diaData.ejercicios.length
+                });
+            });
+
+            if (routineData.descanso) {
+                daysMap.set(routineData.descanso, {
+                    enfoque: "Día de Descanso",
+                    duracion: "Recuperación.",
+                    isRest: true,
+                    exerciseCount: 0
+                });
+            }
+            
+            const today = new Date();
+            const diaHoy = diasSemana[today.getDay()];
+            
+            order.forEach(diaKey => {
+                const data = daysMap.get(diaKey);
+                
+                if (data) {
+                    const card = document.createElement('div');
+                    let cardClass = 'weekly-card';
+                    if (diaKey === diaHoy) {
+                        cardClass += ' current-day-highlight';
+                    } else if (data.isRest) {
+                        cardClass += ' rest-day';
+                    }
+                    card.className = cardClass;
+                    
+                    const enfoqueText = data.isRest ? data.enfoque : `Enfoque: ${data.enfoque}`;
+                    const exerciseCountText = data.exerciseCount > 0 ? `(${data.exerciseCount} ejercicios)` : '';
+
+                    card.innerHTML = `
+                        <h4>${diaKey}</h4>
+                        <p><strong>${enfoqueText}</strong> ${exerciseCountText}</p>
+                        <p>Duración: ${data.duracion}</p>
+                    `;
+                    weeklyCardsContainer.appendChild(card);
+                }
+            });
+        }
+
+        // Carga ambas tablas (la del día y la semanal)
+        function cargarRutinaEnAmbasTablas(routine) {
+            const mainTitle = document.getElementById('planeacion-main-title');
+            const noteP = document.getElementById('routine-note');
+
+            mainTitle.textContent = `📋 Rutina: ${routine.semana || 'Planeación'}`;
+            noteP.innerHTML = `**Nota del Entrenador:** ${routine.nota_estilo || 'Rutina personalizada.'}`;
+
+            const today = new Date();
+            const diaHoy = diasSemana[today.getDay()];
+            
+            cargarRutinaDelDia(diaHoy, routine);
+            cargarPlaneacionSemanal(routine);
+        }
+        
+        // Carga las rutinas por defecto 
+        function cargarRutinasPorDefecto() {
+            const defaultRoutine = {
+                semana: "Planeación Inicial",
+                nota_estilo: "Esta es tu planeación pre-cargada. Los ejercicios que añadas con el Coach IA se guardarán aquí.",
+                dias: [
+                    { dia: "Lunes", enfoque: "Full Body (Descarga una para detalles)", duracion_sugerida_min: 60, ejercicios: [] },
+                    { dia: "Martes", enfoque: "Cardio", duracion_sugerida_min: 60, ejercicios: [] },
+                    { dia: "Miércoles", enfoque: "Híbrido", duracion_sugerida_min: 30, ejercicios: [] },
+                    { dia: "Jueves", enfoque: "Pierna/Fuerza", duracion_sugerida_min: 65, ejercicios: [] },
+                    { dia: "Viernes", enfoque: "Pecho y Espalda", duracion_sugerida_min: 60, ejercicios: [] },
+                    { dia: "Sábado", enfoque: "Circuito/Deporte", duracion_sugerida_min: 60, ejercicios: [] },
+                ],
+                descanso: "Domingo"
+            };
+            localStorage.setItem(ROUTINE_KEY, JSON.stringify(defaultRoutine));
+            cargarRutinaEnAmbasTablas(defaultRoutine);
+        }
+
+
+        // Función principal para descargar la rutina seleccionada
+        async function descargarRutinaSeleccionada() {
+            const select = document.getElementById('fitness-idol');
+            const selectedIdol = select.value;
+
+            if (!selectedIdol) {
+                alert("Por favor, selecciona un ídolo fitness de la lista.");
+                return;
+            }
+
+            const button = document.getElementById('descarga-btn');
+            const originalText = button.textContent;
+            button.textContent = 'Descargando...';
+            button.disabled = true;
+
+            const endpoint = IDOL_ENDPOINTS[selectedIdol];
+            const fullUrl = BASE_API_URL + endpoint;
+            
+            try {
+                const response = await fetch(fullUrl);
+                if (!response.ok) {
+                    throw new Error(`Error HTTP: ${response.status} en la URL: ${fullUrl}`);
+                }
+                
+                const routineData = await response.json();
+                
+                // Añadir el nombre del ídolo como el nombre de la rutina si no tiene uno
+                if (!routineData.semana) {
+                    routineData.semana = `Rutina de ${selectedIdol}`;
+                }
+
+                localStorage.setItem(ROUTINE_KEY, JSON.stringify(routineData));
+                cargarRutinaEnAmbasTablas(routineData);
+
+                console.log(`Rutina de ${selectedIdol} descargada y cargada con éxito.`);
+
+            } catch (error) {
+                console.error("Error al descargar la rutina:", error);
+                alert(`Error al descargar la rutina de ${selectedIdol}. Revisa la consola.`);
+            } finally {
+                button.textContent = originalText;
+                button.disabled = false;
+            }
+        }
+        
+
+        // Configuración de la API de Gemini
+        const GEMINI_MODEL = 'gemini-2.5-flash-preview-09-2025';
+        const GEMINI_API_KEY = "AIzaSyBkuIS0qQ7ogHIT34rSqawHdcpc_F6YiGY"; 
+        const GEMINI_BASE_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+        
+        const QNA_SYSTEM_INSTRUCTION = "Actúa como un entrenador personal y nutricionista amigable y experto. Tu objetivo es proporcionar consejos de fitness, responder preguntas sobre rutinas, ejercicios y nutrición. Responde siempre de manera concisa y útil.";
+        
+        const ROUTINE_SYSTEM_INSTRUCTION = "Eres un generador de rutinas de fitness profesional. Crea una lista de 3 a 5 ejercicios efectivos para el enfoque muscular solicitado. Para cada ejercicio, proporciona un nombre, el número de series sugeridas ('3', '4', etc.) y el rango de repeticiones sugeridas ('8-12', '10-15', etc.). DEBES RESPONDER ÚNICAMENTE CON EL ARRAY JSON SOLICITADO, sin texto adicional.";
+
+        // Mapeo de días de la semana de Date.getDay() a español
+        const diasSemana = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+        
+        // Esquema JSON para la rutina estructurada
+        const routineSchema = {
+            type: "ARRAY",
+            items: {
+                type: "OBJECT",
+                properties: {
+                    "nombre": { "type": "STRING", description: "The name of the exercise, e.g., 'Sentadilla Profunda'." },
+                    "series": { "type": "STRING", description: "Number of suggested sets, e.g., '3'." },
+                    "repeticiones": { "type": "STRING", description: "Number of suggested reps, e.g., '8-12'." }
+                },
+                required: ["nombre", "series", "repeticiones"],
+                propertyOrdering: ["nombre", "series", "repeticiones"]
+            }
+        };
+        // --- FUNCIÓN DE INTERACCIÓN CON GEMINI (Q&A) ---
+        async function askGemini() {
+            const query = document.getElementById('gemini-input').value.trim();
+            const responseArea = document.getElementById('gemini-response-area');
+            
+            if (!query) {
+                responseArea.innerHTML = '<p class="p-message error-message">Por favor, ingresa una pregunta.</p>';
+                return;
+            }
+
+            responseArea.innerHTML = '<p class="loading-message">Generando respuesta... ✨</p>';
+            document.getElementById('gemini-input').value = ''; 
+
+            const payload = {
+                contents: [{ parts: [{ text: query }] }],
+                tools: [{ "google_search": {} }],
+                systemInstruction: { parts: [{ text: QNA_SYSTEM_INSTRUCTION }] },
+            };
+
+            const options = {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            };
+
+            try {
+                const response = await exponentialBackoffFetch(GEMINI_BASE_URL, options);
+                const result = await response.json();
+                
+                const candidate = result.candidates?.[0];
+                
+                if (candidate && candidate.content?.parts?.[0]?.text) {
+                    const text = candidate.content.parts[0].text;
+                    let sources = [];
+                    const groundingMetadata = candidate.groundingMetadata;
+
+                    if (groundingMetadata && groundingMetadata.groundingAttributions) {
+                        sources = groundingMetadata.groundingAttributions
+                            .map(attribution => ({
+                                uri: attribution.web?.uri,
+                                title: attribution.web?.title,
+                            }))
+                            .filter(source => source.uri && source.title);
+                    }
+
+                    let outputHTML = `<div>${text.replace(/\n/g, '<br>')}</div>`;
+                    
+                    if (sources.length > 0) {
+                        outputHTML += '<h4 style="margin-top: 20px; color: #e0e0e0;">Fuentes:</h4>'; /* Subtítulo fuentes */
+                        outputHTML += '<ul class="source-list">';
+                        sources.forEach(source => {
+                            outputHTML += `<li><a href="${source.uri}" target="_blank">${source.title}</a></li>`;
+                        });
+                        outputHTML += '</ul>';
+                    }
+
+                    responseArea.innerHTML = outputHTML;
+
+                } else {
+                    responseArea.innerHTML = '<p class="error-message">Error: No se pudo obtener una respuesta válida de Gemini. Inténtalo de nuevo.</p>';
+                }
+
+            } catch (error) {
+                console.error("Error al comunicarse con la API de Gemini:", error);
+                responseArea.innerHTML = '<p class="error-message">Ocurrió un error al procesar tu solicitud. Revisa la consola para más detalles.</p>';
+            }
+        }
+
+        // --- FUNCIÓN DE COACH IA (GENERACIÓN DE RUTINA ESTRUCTURADA) ---
+        async function generateRoutine() {
+            const muscleGroup = document.getElementById('muscle-group').value.trim();
+            const statusArea = document.getElementById('coach-status-area');
+            
+            if (!muscleGroup) {
+                statusArea.innerHTML = '<p class="p-message error-message">Por favor, ingresa un grupo muscular o enfoque (Ej: Espalda).</p>';
+                return;
+            }
+
+            statusArea.innerHTML = `<p class="loading-message">Generando rutina para: <strong>${muscleGroup}</strong>... 🧠</p>`;
+            
+            const userQuery = `Genera una rutina de ejercicios de 3 a 5 ejercicios para el siguiente enfoque: ${muscleGroup}`;
+            
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                systemInstruction: { parts: [{ text: ROUTINE_SYSTEM_INSTRUCTION }] },
+                generationConfig: {
+                    responseMimeType: "application/json",
+                    responseSchema: routineSchema
+                }
+            };
+
+            const options = {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            };
+
+            try {
+                const response = await exponentialBackoffFetch(GEMINI_BASE_URL, options);
+                const result = await response.json();
+                console.log("Respuesta de Gemini para rutina estructurada:", result);
+                const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+
+                if (jsonText) {
+                    const newExercises = JSON.parse(jsonText);
+                    
+                    if (newExercises.length > 0) {
+                        // 1. Obtener la rutina actual
+                        const routineJSON = localStorage.getItem(ROUTINE_KEY);
+                        let routine = routineJSON ? JSON.parse(routineJSON) : null;
+
+                        if (!routine) {
+                            // Si no hay rutina base, cargar la por defecto
+                            cargarRutinasPorDefecto();
+                            const defaultRoutineJSON = localStorage.getItem(ROUTINE_KEY);
+                            routine = JSON.parse(defaultRoutineJSON);
+                        }
+
+                        // 2. Encontrar el día de hoy
+                        const today = new Date();
+                        const diaHoy = diasSemana[today.getDay()];
+                        
+                        let currentDayRoutine = routine.dias.find(d => d.dia === diaHoy);
+                        
+                        if (!currentDayRoutine) {
+                            // Si el día de hoy no existe en la rutina (raro, pero posible en la default), lo creamos.
+                            currentDayRoutine = { dia: diaHoy, enfoque: muscleGroup, duracion_sugerida_min: 45, ejercicios: [] };
+                            routine.dias.push(currentDayRoutine);
+                        }
+                        
+                        // 3. Actualizar enfoque y fusionar ejercicios
+                        currentDayRoutine.enfoque = `${currentDayRoutine.enfoque} + ${muscleGroup} (IA)`;
+                        currentDayRoutine.ejercicios = [...currentDayRoutine.ejercicios, ...newExercises];
+                        
+                        // 4. Guardar y Recargar
+                        localStorage.setItem(ROUTINE_KEY, JSON.stringify(routine));
+                        cargarRutinaEnAmbasTablas(routine);
+                        
+                        statusArea.innerHTML = `
+                            <p class="success-message">🎉 Rutina generada y agregada a tu plan de ${diaHoy}!</p>
+                            <p style="color: #e0e0e0;">Ve a la pestaña 🗓️ Planeación para ver los ${newExercises.length} nuevos ejercicios.</p>
+                        `;
+
+                    } else {
+                        statusArea.innerHTML = '<p class="error-message">El Coach IA no pudo generar ejercicios. Intenta con un enfoque diferente.</p>';
+                    }
+
+                } else {
+                    statusArea.innerHTML = '<p class="error-message">Error: La respuesta de Gemini no contiene datos JSON válidos. Inténtalo de nuevo.</p>';
+                }
+
+            } catch (error) {
+                console.error("Error al generar la rutina:", error);
+                statusArea.innerHTML = '<p class="error-message">Ocurrió un error de conexión o procesamiento. Revisa la consola.</p>';
+            }
+        }
+
+
+        // Ejecutar funciones al cargar la página
+        window.onload = function() {
+            cargarFechaYHora();
+
+            const routineData = localStorage.getItem(ROUTINE_KEY);
+            if (routineData) {
+                cargarRutinaEnAmbasTablas(JSON.parse(routineData));
+            } else {
+                cargarRutinasPorDefecto();
+            }
+            
+            cargarBitacoraGuardada();
+            
+            // Asegura que al cargar la página, solo esté visible la pestaña 'Registrar'
+            showTab('registrar-tab', document.querySelector('.nav-bar button:nth-child(1)'));
+        };
+
+        /**
+         * Verifica si la app tiene acceso real a internet.
+         * Usa navigator.onLine como primera aproximación y realiza un ping a https://www.gstatic.com/generate_204
+         * para confirmar conectividad real (timeout 3s).
+         * @param {boolean} forcePing - cuando true fuerza el ping incluso si navigator.onLine === false
+         * @returns {Promise<boolean>}
+         */
+        async function checkOnlineStatus(forcePing = false) {
+            const indicator = document.getElementById('online-indicator');
+            const textEl = document.getElementById('online-text');
+
+            // Si navigator.reportar offline y no forzamos, marcamos offline rápido
+            if (!navigator.onLine && !forcePing) {
+                setOffline();
+                return false;
+            }
+
+            // Intento de ping rápido para confirmar acceso real
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+            try {
+                const res = await fetch('https://studio--studio-9121294900-64a17.us-central1.hosted.app/api/hello', {
+                    method: 'GET',
+                    cache: 'no-store',
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+
+                if (res && (res.status === 204 || res.ok)) {
+                    setOnline();
+                    return true;
+                } else {
+                    setOffline();
+                    return false;
+                }
+            } catch (err) {
+                clearTimeout(timeoutId);
+                setOffline();
+                return false;
+            }
+
+            // helpers locales
+            function setOnline() {
+                indicator.classList.remove('offline', 'hidden');
+                indicator.querySelector('.dot').style.background = '#28a745';
+                textEl.textContent = 'En línea';
+                indicator.title = 'Conexión OK';
+            }
+            function setOffline() {
+                indicator.classList.add('offline');
+                indicator.classList.remove('hidden');
+                indicator.querySelector('.dot').style.background = '#dc3545';
+                textEl.textContent = 'Sin conexión';
+                indicator.title = 'Sin acceso a Internet';
+            }
+        }
+
+        // Manejo de eventos online/offline del navegador
+        window.addEventListener('online', () => {
+            // cuando regresa la señal, confirmamos con un ping
+            checkOnlineStatus(true);
+        });
+        window.addEventListener('offline', () => {
+            // cambio inmediato visual cuando el navegador detecta offline
+            const indicator = document.getElementById('online-indicator');
+            if (indicator) {
+                indicator.classList.add('offline');
+                indicator.querySelector('.dot').style.background = '#dc3545';
+                document.getElementById('online-text').textContent = 'Sin conexión';
+                indicator.title = 'Sin acceso a Internet';
+            }
+        });
+
+        // Verificación periódica cada 30s (por si navigator.onLine está true pero no hay acceso real)
+        const ONLINE_CHECK_INTERVAL_MS = 30000;
+        setInterval(() => {
+            checkOnlineStatus();
+        }, ONLINE_CHECK_INTERVAL_MS);
+
+        // Llamada inicial al cargar
+        window.addEventListener('load', () => {
+            checkOnlineStatus();
+        });
+        
     </script>
-
-
-
 </body>
 </html>

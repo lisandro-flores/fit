@@ -2,10 +2,9 @@ const CACHE_NAME = "v1";
 const ASSETS = [ // Archivos a cachear
   "./index.html",
   "./manifest.json",
-  "./styles.css",
-  "./app.js",
+  "./icons/favicon.png",
   "./icons/icon-192.png",
-  "./icons/icon-512.png"
+  "./icons/icon-512.jpg"
 ];
 
 // Evento 'install': se ejecuta cuando el Service Worker se instala por primera vez.
@@ -42,10 +41,13 @@ self.addEventListener("fetch", event => {
 	  return (
 		cachedResponse || // Si está en caché, devuelve la respuesta cacheada.
 		fetch(event.request).then(networkResponse => {
-		  return caches.open(CACHE_NAME).then(cache => {
-			cache.put(event.request, networkResponse.clone()); // Cacha la nueva respuesta.
-			return networkResponse; // Devuelve la respuesta de la red.
-		  });
+		  // Solo cachear respuestas GET exitosas
+		  if (event.request.method === 'GET' && networkResponse.ok) {
+			caches.open(CACHE_NAME).then(cache => {
+			  cache.put(event.request, networkResponse.clone());
+			});
+		  }
+		  return networkResponse; // Devuelve la respuesta de la red.
 		})
 	  );
 	})
